@@ -46,12 +46,17 @@ def train_rl_agent(params: dict, env: CatchEnv, model: Sequential):
     alpha = 0.6
     beta = 0.4
     memory = PrioritizedReplayBuffer(params['memory_size'], alpha)
-    moving_avg_reward = deque(maxlen=10)
+    moving_avg_reward = deque(maxlen=20)
     all_rewards = []
 
     # Create the target network model
     target_model = clone_model(model)
     target_model.set_weights(model.get_weights())
+
+    # Early stopping
+    patience = 50
+    best_moving_avg_reward = -np.inf
+    no_improvement_count = 0
 
     for ep in range(params['number_of_episodes']):
         env.reset()
@@ -103,11 +108,23 @@ def train_rl_agent(params: dict, env: CatchEnv, model: Sequential):
 
             params['epsilon'] = max(params['epsilon_end'], params['epsilon'] * params['epsilon_decay'])
 
-            # Periodically update the target network
-            if ep % params['target_update_interval'] == 0:
-                target_model.set_weights(model.get_weights())
+        # Update the target model
+        if ep % params['target_update_interval'] == 0:
+            target_model.set_weights(model.get_weights())
 
-        print(f"Episode {ep + 1} completed. Moving avg reward: {sum(moving_avg_reward) / len(moving_avg_reward):.2f}")
+        current_moving_avg_reward = sum(moving_avg_reward) / len(moving_avg_reward)
+        print(f"Episode {ep + 1} completed. Moving avg reward: {current_moving_avg_reward:.2f}")
+
+        # Check for early stopping
+        if current_moving_avg_reward > best_moving_avg_reward:
+            best_moving_avg_reward = current_moving_avg_reward
+            no_improvement_count = 0
+        else:
+            no_improvement_count += 1
+
+        if no_improvement_count >= patience:
+            print(f"Early stopping triggered. No improvement in moving average reward for {patience} episodes.")
+            break
 
     if params['visualize']:
         destroy()

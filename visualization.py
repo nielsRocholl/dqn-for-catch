@@ -76,7 +76,3 @@ def plot_moving_average(window_size: int = 100, path: str = "performances/") -> 
     plt.xlabel("Episodes")
     plt.legend()
     plt.show()
-
-
-
-plot_moving_average()
