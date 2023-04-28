@@ -1,5 +1,5 @@
 from keras.models import Sequential
-from keras.optimizers import Adam
+from keras.optimizers import Adam, RMSprop
 from keras.layers import Conv2D, Dense, Flatten, Dropout
 from keras.regularizers import l1_l2
 
@@ -24,7 +24,7 @@ def build_dqn(n_actions, input_dims, lr=0.00025) -> Sequential:
     ])
 
     # compile the model
-    model.compile(optimizer=Adam(learning_rate=lr), loss='mse')
+    model.compile(optimizer=RMSprop(learning_rate=lr), loss='huber_loss')
     return model
 
 
@@ -46,7 +46,7 @@ def build_dqn_hp_search(n_actions, input_dims, lr=0.00025, dropout_rate=0.3, l1_
         Dropout(dropout_rate),
         Conv2D(64, (4, 4), strides=(2, 2), activation='relu'),
         Dropout(dropout_rate),
-        Conv2D(64, (3, 3), strides=(1, 1), activation='relu'),
+        Conv2D(64, (2, 2), strides=(1, 1), activation='relu'),
         Flatten(),
         Dense(512, activation='relu', kernel_regularizer=l1_l2(l1=l1_reg, l2=l2_reg)),
         Dropout(dropout_rate),
