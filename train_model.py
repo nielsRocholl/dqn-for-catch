@@ -1,18 +1,13 @@
+import os
+
 import numpy as np
 from collections import deque
 from keras import Sequential
 from keras.models import clone_model
 
-
 # import custom modules
 from catch_environment import CatchEnv
 from visualization import visualize, destroy
-
-import os
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-
-import tensorflow as tf
-tf.get_logger().setLevel('ERROR')
 
 
 class PrioritizedReplayBuffer:
@@ -43,25 +38,22 @@ class PrioritizedReplayBuffer:
 
 
 def train_rl_agent(params: dict, env: CatchEnv, model: Sequential):
-    alpha = 0.6
-    beta = 0.4
-    memory = PrioritizedReplayBuffer(params['memory_size'], alpha)
-    moving_avg_reward = deque(maxlen=20)
+    memory = PrioritizedReplayBuffer(params['memory_size'], params['alpha'])
+    moving_avg_reward = deque(maxlen=50)
     all_rewards = []
+    all_losses = []
+    all_wins = []
+    wins = 0
 
     # Create the target network model
     target_model = clone_model(model)
     target_model.set_weights(model.get_weights())
 
-    # Early stopping
-    patience = 50
-    best_moving_avg_reward = -np.inf
-    no_improvement_count = 0
-
     for ep in range(params['number_of_episodes']):
         env.reset()
         state, reward, terminal = env.step(1)
         state = np.expand_dims(state, axis=0)
+        episode_losses = []  # Store the model losses for the current episode
 
         while not terminal:
             if params['visualize']:
@@ -85,9 +77,10 @@ def train_rl_agent(params: dict, env: CatchEnv, model: Sequential):
             if terminal:
                 moving_avg_reward.append(reward)
                 all_rewards.append(reward)
+                wins += reward
 
-            if len(memory) > params['batch_size']:
-                batch, indices, weights = memory.sample(params['batch_size'], beta)
+            if len(memory) > params['observation_steps']:
+                batch, indices, weights = memory.sample(params['batch_size'], params['beta'])
                 states, actions, rewards, next_states, terminals = zip(*batch)
                 states, next_states = np.concatenate(states), np.concatenate(next_states)
                 q_values = model.predict(states)
@@ -95,38 +88,29 @@ def train_rl_agent(params: dict, env: CatchEnv, model: Sequential):
 
                 for i, (s, a, r, ns, t) in enumerate(batch):
                     # calculate target q value
-                    target = r + (1 - int(t)) * np.max(next_q_values[i])
+                    target = r + params['gamma'] * np.max(next_q_values[i]) * (1 - t)
                     q_values[i][a] = target
                 # train model on batch
-                model.train_on_batch(states, q_values)
-                # update priorities
+                loss = model.train_on_batch(states, q_values)
+                episode_losses.append(loss)
                 td_errors = np.abs(q_values - model.predict(states))
                 priorities = np.max(td_errors, axis=1)
                 memory.update_priorities(indices, priorities)
 
-                beta = min(1.0, beta + 0.001)
+                params['beta'] = min(1.0, params['beta'] + 0.001)
 
             params['epsilon'] = max(params['epsilon_end'], params['epsilon'] * params['epsilon_decay'])
 
-        # Update the target model
+            # Periodically update the target network
         if ep % params['target_update_interval'] == 0:
             target_model.set_weights(model.get_weights())
 
-        current_moving_avg_reward = sum(moving_avg_reward) / len(moving_avg_reward)
-        print(f"Episode {ep + 1} completed. Moving avg reward: {current_moving_avg_reward:.2f}")
-
-        # Check for early stopping
-        if current_moving_avg_reward > best_moving_avg_reward:
-            best_moving_avg_reward = current_moving_avg_reward
-            no_improvement_count = 0
-        else:
-            no_improvement_count += 1
-
-        if no_improvement_count >= patience:
-            print(f"Early stopping triggered. No improvement in moving average reward for {patience} episodes.")
-            break
+        all_losses.append(np.mean(episode_losses))
+        all_wins.append(wins)
+        if ep > 50:
+            print(f"Episode: {ep + 1}, AVG: {sum(moving_avg_reward) / len(moving_avg_reward):.2f}")
 
     if params['visualize']:
         destroy()
 
-    return model, all_rewards
+    return model, all_rewards, all_losses, all_wins

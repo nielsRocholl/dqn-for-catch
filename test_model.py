@@ -32,4 +32,4 @@ def test_rl_agent(model_path, env, num_episodes=50):
             if terminal:
                 reward_list.append(reward)
 
-        print(f"Episode {ep + 1} completed. Total reward: {sum(reward_list)/len(reward_list):.2f}")
+        print(f"{sum(reward_list)}/{ep + 1}")

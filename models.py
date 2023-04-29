@@ -54,5 +54,20 @@ def build_dqn_hp_search(n_actions, input_dims, lr=0.00025, dropout_rate=0.3, l1_
     ])
 
     # compile the model
-    model.compile(optimizer=Adam(learning_rate=lr), loss='mse')
+    model.compile(optimizer=RMSprop(learning_rate=lr), loss='huber_loss')
+    return model
+
+
+def dqn_from_git(n_actions, input_dims, lr=0.00025) -> Sequential:
+    model = Sequential([
+        Conv2D(32, kernel_size=8, strides=4, padding="same", kernel_initializer="normal", input_shape=input_dims,
+               activation="relu"),
+        Conv2D(64, kernel_size=4, strides=2, kernel_initializer="normal", padding="same", activation="relu"),
+        Conv2D(64, kernel_size=3, strides=1, kernel_initializer="normal", padding="same", activation="relu"),
+        Flatten(),
+        Dense(512, kernel_initializer="normal", activation="relu"),
+        Dense(n_actions, kernel_initializer="normal")
+    ])
+
+    model.compile(optimizer=Adam(learning_rate=lr), loss="mse")
     return model
