@@ -65,4 +65,3 @@ class CatchEnv():
 
     def state_shape(self):
         return (self.fps,) + self.output_shape
-

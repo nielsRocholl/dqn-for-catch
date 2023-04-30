@@ -1,157 +1,236 @@
+import random
+
+import keras.utils
+import matplotlib.pyplot as plt
 import numpy as np
-from collections import deque
-from keras import Sequential
+import pandas as pd
 
 # import custom modules
 from catch_environment import CatchEnv
-from visualization import visualize, destroy
+from models import dqn
 
 
-class PrioritizedReplayBuffer:
-    def __init__(self, max_size, alpha):
-        self.buffer = deque(maxlen=max_size)
-        self.priorities = deque(maxlen=max_size)
-        self.alpha = alpha
+class ReplayBuffer():
 
-    def add(self, experience, priority):
-        self.buffer.append(experience)
-        self.priorities.append(priority ** self.alpha)
+    def __init__(self, max_size):
+        self.max_size = max_size
+        self.buffer = []
 
-    def sample(self, batch_size, beta):
-        priorities = np.array(self.priorities)
-        probabilities = priorities / priorities.sum()
-        indices = np.random.choice(len(self.buffer), batch_size, p=probabilities)
-        experiences = [self.buffer[i] for i in indices]
-        weights = (len(self.buffer) * probabilities[indices]) ** (-beta)
-        weights /= weights.max()
-        return experiences, indices, weights
+    def add_sample(self, states, actions, rewards):
+        episode = {"states": states, "actions": actions, "rewards": rewards, "summed_rewards": sum(rewards)}
+        self.buffer.append(episode)
 
-    def update_priorities(self, indices, priorities):
-        for i, priority in zip(indices, priorities):
-            self.priorities[i] = priority ** self.alpha
+    def sort(self):
+        # sort buffer
+        self.buffer = sorted(self.buffer, key=lambda i: i["summed_rewards"], reverse=True)
+        # keep the max buffer size
+        self.buffer = self.buffer[:self.max_size]
+
+    def get_random_samples(self, batch_size):
+        self.sort()
+        idxs = np.random.randint(0, len(self.buffer), batch_size)
+        batch = [self.buffer[idx] for idx in idxs]
+        return batch
+
+    def get_n_best(self, n):
+        self.sort()
+        return self.buffer[:n]
 
     def __len__(self):
         return len(self.buffer)
 
 
-def train_rl_agent(params: dict, env: CatchEnv, model: Sequential):
-    alpha = 0.6
-    beta = 0.4
-    memory = PrioritizedReplayBuffer(params['memory_size'], alpha)
-    moving_avg_reward = deque(maxlen=10)
-    all_rewards = []
+class CatchAgent:
+    def __init__(self):
+        self.environment = CatchEnv()
+        self.state_shape = (84, 84, 4)
+        self.action_space = 3
+        self.warm_up_episodes = 50
+        self.visualize = False
+        self.memory = ReplayBuffer(700)
+        self.batch_size = 256
+        self.last_few = 50
+        self.command_size = 2
+        self.desired_return = 1
+        self.desired_horizon = 1
+        self.horizon_scale = 0.02
+        self.return_scale = 0.02
+        self.rewards = []
+        self.losses = []
 
-    for ep in range(params['number_of_episodes']):
+        self.network = dqn(self.state_shape, self.action_space)
+        self.warm_up_buffer()
+
+    def warm_up_buffer(self):
+        print("warming up the buffer")
+        states = []
+        actions = []
+        rewards = []
+        desired_return = self.desired_return
+        desired_horizon = self.desired_horizon
+
+        for e in range(self.warm_up_episodes):
+
+            # terminal = False
+            self.environment.reset()
+
+            # for i in range(random.randint(1, 30)):
+            state, reward, terminal = self.environment.step(1)
+
+            while not terminal:
+                # append a stack of 4 states
+                states.append(state)
+                command = np.asarray([desired_return * self.return_scale, desired_horizon * self.horizon_scale], dtype=np.float32)
+                command = np.reshape(command, [1, len(command)])
+
+                # take an action
+                action = self.get_action(state, command)
+                actions.append(action)
+                # take a step
+                state, reward, terminal = self.environment.step(action)
+                # append the reward
+                rewards.append(reward)
+
+                desired_return -= reward
+                desired_horizon -= 1
+                desired_horizon = np.maximum(desired_horizon, 1)
+
+            self.memory.add_sample(states, actions, rewards)
+
+    def get_action(self, state, command):
+        state = np.expand_dims(state, axis=0)  # Add an extra dimension for batch size
+        action_probabilities = self.network.predict([state, command], verbose=0)
+        action = np.random.choice(np.arange(0, self.action_space), p=action_probabilities[0])
+
+        return action
+
+    def get_greedy_action(self, state, command):
+        state = np.expand_dims(state, axis=0)  # Add an extra dimension for batch size
+        action_probabilities = self.network.predict([state, command], verbose=0)
+        action = np.argmax(action_probabilities)
+
+        return action
+
+    def train_network(self):
+
+        # sample a batch of random episodes
+        random_episodes = self.memory.get_random_samples(self.batch_size)
+
+        states = np.zeros((self.batch_size, self.state_shape[0], self.state_shape[1], self.state_shape[2]))
+        commands = np.zeros((self.batch_size, 2))
+
+        y = []
+
+        for idx, episode in enumerate(random_episodes):
+            T = len(episode['states'])
+            t1 = np.random.randint(0, T - 1)
+            t2 = np.random.randint(t1 + 1, T)
+
+            state = np.float32(episode['states'][t1])
+            desired_return = sum(episode['rewards'][t1:t2])
+            desired_horizon = t2 - t1
+
+            target = episode['actions'][t1]
+
+            states[idx] = state[0]
+            commands[idx] = np.asarray([desired_return * self.return_scale, desired_horizon * self.horizon_scale])
+            y.append(target)
+
+        _y = keras.utils.to_categorical(y, num_classes=self.action_space)
+
+        self.network.fit([states, commands], _y, verbose=0)
+
+    def sample_exploratory_commands(self):
+        best_episodes = self.memory.get_n_best(self.last_few)
+        exploratory_desired_horizon = np.mean([len(i["states"]) for i in best_episodes])
+
+        returns = [i["summed_rewards"] for i in best_episodes]
+        exploratory_desired_returns = np.random.uniform(np.mean(returns), np.mean(returns) + np.std(returns))
+
+        return [exploratory_desired_returns, exploratory_desired_horizon]
+
+    def generate_episode(self, e, desired_return, desired_horizon, testing):
+
+        env = CatchEnv()
+        tot_rewards = []
+
+        states = []
+        actions = []
+        rewards = []
+
+        score = 0
+
         env.reset()
-        state, reward, terminal = env.step(1)
-        state = np.expand_dims(state, axis=0)
+        # for i in range(random.randint(1, 30)):
+        state, _, terminal = env.step(1)
 
         while not terminal:
-            if params['visualize']:
-                visualize(state)
+            states.append(state)
 
-            if np.random.rand() < params['epsilon']:
-                action = np.random.randint(0, 3)
+            command = np.asarray([desired_return * self.return_scale, desired_horizon * self.horizon_scale], dtype=np.float32)
+            command = np.reshape(command, [1, len(command)])
+
+            if testing:
+                # always take the greedy action
+                action = self.get_greedy_action(state, command)
             else:
-                q_values = model.predict(state)
-                action = np.argmax(q_values)
+                action = self.get_action(state, command)
+                actions.append(action)
 
             next_state, reward, terminal = env.step(action)
-            next_state = np.squeeze(next_state)
-            next_state = np.expand_dims(next_state, axis=0)
 
-            initial_priority = max(1, np.max(memory.priorities)) if memory else 1
-            memory.add((state, action, reward, next_state, terminal), initial_priority)
+            # TODO: check if this clipping makes send
+            clipped_reward = np.clip(reward, -1, 1)
+            rewards.append(clipped_reward)
 
-            state = next_state
+            score += reward
 
-            if terminal:
-                moving_avg_reward.append(reward)
-                all_rewards.append(reward)
+            desired_return -= reward
+            desired_horizon -= 1
+            desired_horizon = np.maximum(desired_horizon, 1)
 
-            if len(memory) > params['batch_size']:
-                batch, indices, weights = memory.sample(params['batch_size'], beta)
-                states, actions, rewards, next_states, terminals = zip(*batch)
-                states, next_states = np.concatenate(states), np.concatenate(next_states)
-                q_values = model.predict(states)
-                next_q_values = model.predict(next_states)
+        self.memory.add_sample(states, actions, rewards)
 
-                for i, (s, a, r, ns, t) in enumerate(batch):
-                    target = r + (1 - int(t)) * np.max(next_q_values[i])
-                    q_values[i][a] = target
-                model.train_on_batch(states, q_values)
+        self.rewards.append(score)
 
-                td_errors = np.abs(q_values - model.predict(states))
-                priorities = np.max(td_errors, axis=1)
-                memory.update_priorities(indices, priorities)
+        return score
 
-                beta = min(1.0, beta + 0.001)
 
-            params['epsilon'] = max(params['epsilon_end'], params['epsilon'] * params['epsilon_decay'])
-        print(f"Episode {ep + 1} completed. Moving avg reward: {sum(moving_avg_reward) / len(moving_avg_reward):.2f}")
+def run_experiment():
+    episodes = 200
+    returns = []
 
-    if params['visualize']:
-        destroy()
+    agent = CatchAgent()
 
-    return model, all_rewards
+    for episode in range(episodes):
+        print("Episode {}".format(episode))
 
-# def train_rl_agent(params: dict, env: CatchEnv, model: Sequential):
-#     memory = deque(maxlen=params['memory_size'])
-#     moving_avg_reward = deque(maxlen=10)
-#     all_rewards = []
+        for i in range(100):
+            agent.train_network()
+
+        print("finished training")
+
+        for i in range(15):
+            tmp_r = []
+            exploratory_commands = agent.sample_exploratory_commands()
+            desired_return = exploratory_commands[0]
+            desired_horizon = exploratory_commands[1]
+            r = agent.generate_episode(episode, desired_return, desired_horizon, False)
+            tmp_r.append(r)
+
+        print(np.mean(tmp_r))
+        returns.append(np.mean(tmp_r))
+
+        exploratory_commands = agent.sample_exploratory_commands()
+
+    plt.plot(returns)
+    pd.DataFrame(returns).to_csv("performances/returns.csv")
+
+
+run_experiment()
+
+# env = CatchEnv()
 #
-#     for ep in range(params['number_of_episodes']):
-#         # reset the environment
-#         env.reset()
-#         state, reward, terminal = env.step(1)
-#         # add an extra dimension to the state
-#         state = np.expand_dims(state, axis=0)
-#
-#         while not terminal:
-#             if params['visualize']:
-#                 visualize(state)
-#
-#             # explore or exploit
-#             if np.random.rand() < params['epsilon']:
-#                 # take a random action
-#                 action = np.random.randint(0, 3)
-#             else:
-#                 # take the action with the highest q-value
-#                 q_values = model.predict(state)
-#                 action = np.argmax(q_values)
-#
-#             next_state, reward, terminal = env.step(action)
-#             next_state = np.squeeze(next_state)
-#             # add an extra dimension to the state
-#             next_state = np.expand_dims(next_state, axis=0)
-#
-#             # add the experience to the memory
-#             memory.append((state, action, reward, next_state, terminal))
-#
-#             # update the state
-#             state = next_state
-#
-#             if terminal:
-#                 moving_avg_reward.append(reward)
-#                 all_rewards.append(reward)
-#
-#             if len(memory) > params['batch_size']:
-#                 # sample a batch of experiences from the memory to break the correlation
-#                 batch = random.sample(memory, params['batch_size'])
-#                 states, actions, rewards, next_states, terminals = zip(*batch)
-#                 states, next_states = np.concatenate(states), np.concatenate(next_states)
-#                 q_values = model.predict(states)
-#                 next_q_values = model.predict(next_states)
-#
-#                 for i, (s, a, r, ns, t) in enumerate(batch):
-#                     target = r + (1 - int(t)) * np.max(next_q_values[i])
-#                     q_values[i][a] = target
-#                 model.train_on_batch(states, q_values)
-#
-#             params['epsilon'] = max(params['epsilon_end'], params['epsilon'] * params['epsilon_decay'])
-#         print(f"Episode {ep + 1} completed. Moving avg reward: {sum(moving_avg_reward) / len(moving_avg_reward):.2f}")
-#
-#     if params['visualize']:
-#         destroy()
-#
-#     return model, all_rewards
+# env.reset()
+# for i in range(10):
+#     env.step(1)
