@@ -7,8 +7,8 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 
 from collections import deque
-from keras.models import Sequential
-from keras.layers import Dense, Conv2D, Flatten, Input
+from keras.models import Sequential, Model
+from keras.layers import Dense, Conv2D, Flatten, Input, Concatenate
 from keras.optimizers import RMSprop
 
 from catch_environment import CatchEnv
@@ -24,6 +24,7 @@ class DQNAgent:
 
         # define hyperparameters
         self.state_shape = (84, 84, 4)
+        self.relative_xy_shape = (2,)
         self.action_space = 3
         self.warm_up_episodes = 50
         self.discount_factor = 0.99
@@ -67,21 +68,37 @@ class DQNAgent:
         plt.title('Running Average of Scores')
         plt.show()
 
+    def get_relative_distance(self, state):
+        ball_y, ball_x = np.unravel_index(np.argmax(state[0, :, :, -1]), state[0, :, :, -1].shape)
+        paddle_y, paddle_x = np.unravel_index(np.argmax(state[0, :, :, -2]), state[0, :, :, -2].shape)
+        relative_x = (paddle_x - ball_x) / state.shape[1]
+        relative_y = (paddle_y - ball_y) / state.shape[2]
+        return np.array([[relative_x, relative_y]])
+
     def build_model(self) -> Sequential:
         """
         Define the DQN model
         :return: Sequential model
         """
 
-        model = Sequential([
-            Input(shape=self.state_shape),
-            Conv2D(32, (8, 8), strides=(4, 4), activation='relu', kernel_initializer='he_uniform'),
-            Conv2D(64, (4, 4), strides=(2, 2), activation='relu', kernel_initializer='he_uniform'),
-            Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_uniform'),
-            Flatten(),
-            Dense(512, activation='relu', kernel_initializer='he_uniform'),
-            Dense(self.action_space, activation='linear', kernel_initializer='he_uniform')
-        ])
+        # Image input
+        image_input = Input(shape=self.state_shape)
+        x1 = Conv2D(32, (8, 8), strides=(4, 4), activation='relu', kernel_initializer='he_uniform')(image_input)
+        x1 = Conv2D(64, (4, 4), strides=(2, 2), activation='relu', kernel_initializer='he_uniform')(x1)
+        x1 = Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_uniform')(x1)
+        x1 = Flatten()(x1)
+
+        # Relative x and y distances input
+        relative_xy_input = Input(shape=self.relative_xy_shape)
+
+        # Concatenate flattened Conv2D output and relative x, y distances
+        x = Concatenate()([x1, relative_xy_input])
+
+        # Dense layers
+        x = Dense(512, activation='relu', kernel_initializer='he_uniform')(x)
+        output = Dense(self.action_space, activation='linear', kernel_initializer='he_uniform')(x)
+
+        model = Model(inputs=[image_input, relative_xy_input], outputs=output)
 
         model.compile(loss='mse', optimizer=RMSprop(learning_rate=self.learning_rate))
 
@@ -103,11 +120,12 @@ class DQNAgent:
         if np.random.rand() <= self.epsilon:
             return np.random.randint(0, 3)
         else:
-            q_value = self.model.predict(state, verbose=0)
+            relative_distance = self.get_relative_distance(state)
+            q_value = self.model.predict([state, relative_distance], verbose=0)
             return np.argmax(q_value[0])
 
-    def append_sample(self, state, action, reward, next_state, terminal):
-        self.memory.append((state, action, reward, next_state, terminal))
+    def append_sample(self, state, action, reward, next_state, terminal, relative_distance):
+        self.memory.append((state, action, reward, next_state, terminal, relative_distance))
 
     def decay_epsilon(self):
         if self.epsilon > self.epsilon_min:
@@ -122,6 +140,7 @@ class DQNAgent:
 
         update_input = np.zeros((self.batch_size, *self.state_shape))
         update_target = np.zeros((self.batch_size, *self.state_shape))
+        relative_distance_input = np.zeros((self.batch_size, *self.relative_xy_shape))
 
         action, reward, terminal = [], [], []
 
@@ -131,9 +150,10 @@ class DQNAgent:
             reward.append(mini_batch[i][2])
             update_target[i] = mini_batch[i][3]
             terminal.append(mini_batch[i][4])
+            relative_distance_input[i] = mini_batch[i][5]
 
-        target = self.model.predict(update_input, verbose=0)
-        target_val = self.target_model.predict(update_target, verbose=0)
+        target = self.model.predict([update_input, relative_distance_input], verbose=0)
+        target_val = self.target_model.predict([update_target, relative_distance_input], verbose=0)
 
         for i in range(self.batch_size):
             if terminal[i]:
@@ -142,13 +162,15 @@ class DQNAgent:
                 target[i][action[i]] = reward[i] + self.discount_factor * (np.amax(target_val[i]))
 
         if self.prioritized_memory:
-            history = self.model.fit(update_input, target, batch_size=self.batch_size, epochs=1, verbose=0,
+            history = self.model.fit([update_input, relative_distance_input], target, batch_size=self.batch_size,
+                                     epochs=1, verbose=0,
                                      sample_weight=is_weights)
-            abs_td_errors = np.abs(target - self.model.predict(update_input, verbose=0))
+            abs_td_errors = np.abs(target - self.model.predict([update_input, relative_distance_input], verbose=0))
             abs_td_errors = abs_td_errors.mean(axis=1)
             self.memory.update_priorities(idxs, abs_td_errors)
         else:
-            self.model.fit(update_input, target, batch_size=self.batch_size, epochs=1, verbose=0)
+            self.model.fit([update_input, relative_distance_input], target, batch_size=self.batch_size, epochs=1,
+                           verbose=0)
 
     def warm_up_memory_buffer(self):
         """
@@ -166,16 +188,18 @@ class DQNAgent:
                 # take a step
                 next_state, reward, terminal = self.env.step(action)
                 next_state = np.reshape(next_state, [1] + list(self.state_shape))
+                # calculate relative distance
+                relative_distance = self.get_relative_distance(next_state)
                 # append information to the memory buffer
-                self.append_sample(state, action, reward, next_state, terminal)
+                self.append_sample(state, action, reward, next_state, terminal, relative_distance)
                 # update the current state
                 state = next_state
         print("Finished warming up.")
 
     def run_dqn_agent(self, training_episodes=500):
-
         print(
-            f"Training DQN agent for {training_episodes} episodes. Performance will be printed after {self.running_average.maxlen} episodes.")
+            f"Training DQN agent for {training_episodes} episodes. Performance will be printed after {self.running_average.maxlen} episodes."
+        )
 
         for episode in range(training_episodes):
             score = 0
@@ -189,8 +213,10 @@ class DQNAgent:
                 # take a step
                 next_state, reward, terminal = self.env.step(action)
                 next_state = np.reshape(next_state, [1] + list(self.state_shape))
+                # calculate relative distance
+                relative_distance = self.get_relative_distance(next_state)
                 # append information to memory buffer
-                self.append_sample(state, action, reward, next_state, terminal)
+                self.append_sample(state, action, reward, next_state, terminal, relative_distance)
                 # decay epsilon
                 self.decay_epsilon()
                 # train the neural network
@@ -207,12 +233,13 @@ class DQNAgent:
             # track performance
             self.performance['score'].append(score)
             if episode > self.running_average.maxlen:
-                print(f"Episode: {episode} || Epsilon: {self.epsilon:.2f} || Score: {np.mean(self.running_average):.2f}")
+                print(
+                    f"Episode: {episode} || Epsilon: {self.epsilon:.2f} || Score: {np.mean(self.running_average):.2f}"
+                )
             # print the type of memory buffer used
 
         self.save_data()
         self.plot_running_average()
-
 
 agent = DQNAgent(prioritized_memory=True)
 agent.run_dqn_agent(training_episodes=1500)
