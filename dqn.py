@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from collections import deque
 from keras.models import Sequential
 from keras.layers import Dense, Conv2D, Flatten, Input
-from keras.optimizers import RMSprop
+from keras.optimizers import RMSprop, Adam
 
 from catch_environment import CatchEnv
 from prioritized_replay_buffer import PrioritizedReplayBuffer
@@ -31,7 +31,7 @@ class DQNAgent:
         self.epsilon = 1.0
         self.epsilon_decay = 0.999
         self.epsilon_min = 0.01
-        self.batch_size = 32
+        self.batch_size = 128
         self.warm_up_episodes = self.batch_size * 2
         self.memory_size = 2000
         self.prioritized_memory = prioritized_memory
@@ -50,6 +50,28 @@ class DQNAgent:
 
         # warm up buffer
         self.warm_up_memory_buffer()
+
+    def predict_ball_landing(self):
+        ballx, bally = self.env.ballx, self.env.bally
+        vx, vy = self.env.vx, self.env.vy
+        while bally < self.env.size - 1 - 4:
+            ballx += vx
+            bally += vy
+            if ballx > self.env.size - 1:
+                ballx -= 2 * (ballx - (self.env.size - 1))
+                vx *= -1
+            elif ballx < 0:
+                ballx += 2 * (0 - ballx)
+                vx *= -1
+        return ballx
+
+    def find_player_x(self):
+        row = self.env.image[-5]
+        player_positions = np.where(row == 1)
+        player_start = player_positions[0][0]
+        player_end = player_positions[0][-1]
+        player_x = (player_start + player_end) // 2
+        return player_x
 
     def save_data(self):
         df = pd.DataFrame(self.performance['score'], columns=['score'])
@@ -83,7 +105,7 @@ class DQNAgent:
             Dense(self.action_space, activation='linear', kernel_initializer='he_uniform')
         ])
 
-        model.compile(loss='mse', optimizer=RMSprop(learning_rate=self.learning_rate))
+        model.compile(loss='mse', optimizer=Adam(learning_rate=self.learning_rate))
 
         return model
 
@@ -173,7 +195,6 @@ class DQNAgent:
         print("Finished warming up.")
 
     def run_dqn_agent(self, training_episodes=500):
-
         print(
             f"Training DQN agent for {training_episodes} episodes. Performance will be printed after {self.running_average.maxlen} episodes.")
 
@@ -187,16 +208,28 @@ class DQNAgent:
                 # retrieve an action
                 action = self.get_action(state)
                 # take a step
-                next_state, reward, terminal = self.env.step(action)
+                next_state, env_reward, terminal = self.env.step(action)
                 next_state = np.reshape(next_state, [1] + list(self.state_shape))
+
+                # predict the ball landing position and calculate the smart reward
+                ball_landing = self.predict_ball_landing()
+                player_x = self.find_player_x()
+                distance_to_ball_landing = abs(ball_landing - player_x)
+                # Normalize the distance to the ball landing within the desired range
+                smart_reward = 0.2 - (distance_to_ball_landing / (self.env.size - 1)) * 0.4
+                # print(smart_reward)
+
+                # combine the environment reward and smart reward
+                combined_reward = env_reward + smart_reward
+
                 # append information to memory buffer
-                self.append_sample(state, action, reward, next_state, terminal)
+                self.append_sample(state, action, combined_reward, next_state, terminal)
                 # decay epsilon
                 self.decay_epsilon()
                 # train the neural network
                 self.train_model()
                 # track the score
-                score += reward
+                score += env_reward
                 # update the current state
                 state = next_state
                 # if the episode is over, update the target model
@@ -207,8 +240,8 @@ class DQNAgent:
             # track performance
             self.performance['score'].append(score)
             if episode > self.running_average.maxlen:
-                print(f"Episode: {episode} || Epsilon: {self.epsilon:.2f} || Score: {np.mean(self.running_average):.2f}")
-            # print the type of memory buffer used
+                print(
+                    f"Episode: {episode} || Epsilon: {self.epsilon:.2f} || Score: {np.mean(self.running_average):.2f}")
 
         self.save_data()
         self.plot_running_average()

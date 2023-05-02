@@ -26,7 +26,7 @@ def visualize(state: np.ndarray, enlarging_factor=5) -> None:
         color_frame[resized_frame == 0] = [75, 0, 88]
 
         cv2.imshow(f'Catch Game Frame {i + 1}', color_frame)
-        cv2.waitKey(10)
+        cv2.waitKey(50)
 
 
 def destroy() -> None:
