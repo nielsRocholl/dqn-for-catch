@@ -75,6 +75,9 @@ class DQNAgent:
         relative_y = (paddle_y - ball_y) / state.shape[2]
         return np.array([[relative_x, relative_y]])
 
+    def calculate_distance(self, paddle_pos, ball_pos):
+        return abs(paddle_pos - ball_pos)
+
     def build_model(self) -> Sequential:
         """
         Define the DQN model
@@ -210,13 +213,32 @@ class DQNAgent:
             while not terminal:
                 # retrieve an action
                 action = self.get_action(state)
+
+                # Calculate distance before taking action
+                prev_distance = self.calculate_distance(self.env.pos, self.env.ballx)
+
                 # take a step
                 next_state, reward, terminal = self.env.step(action)
                 next_state = np.reshape(next_state, [1] + list(self.state_shape))
+
+                # Calculate distance after taking action
+                new_distance = self.calculate_distance(self.env.pos, self.env.ballx)
+
+                # Calculate the distance reward
+                if new_distance < prev_distance:
+                    distance_reward = 0.1
+                elif new_distance == prev_distance:
+                    distance_reward = 0.2
+                else:
+                    distance_reward = -0.1
+
+                # Add the distance reward to the original reward
+                total_reward = reward + distance_reward
+
                 # calculate relative distance
                 relative_distance = self.get_relative_distance(next_state)
                 # append information to memory buffer
-                self.append_sample(state, action, reward, next_state, terminal, relative_distance)
+                self.append_sample(state, action, total_reward, next_state, terminal, relative_distance)
                 # decay epsilon
                 self.decay_epsilon()
                 # train the neural network
@@ -240,6 +262,7 @@ class DQNAgent:
 
         self.save_data()
         self.plot_running_average()
+
 
 agent = DQNAgent(prioritized_memory=True)
 agent.run_dqn_agent(training_episodes=1500)
