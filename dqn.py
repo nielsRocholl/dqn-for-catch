@@ -25,7 +25,6 @@ class DQNAgent:
         # define hyperparameters
         self.state_shape = (84, 84, 4)
         self.action_space = 3
-        self.warm_up_episodes = 50
         self.discount_factor = 0.99
         self.learning_rate = 0.001
         self.epsilon = 1.0
@@ -33,9 +32,10 @@ class DQNAgent:
         self.epsilon_min = 0.01
         self.batch_size = 128
         self.warm_up_episodes = self.batch_size * 2
-        self.memory_size = 2000
+        self.memory_size = 5000
         self.prioritized_memory = prioritized_memory
         self.memory = PrioritizedReplayBuffer(self.memory_size) if prioritized_memory else deque(maxlen=2000)
+        self.smart_reward = False
 
         # define models
         self.model = self.build_model()
@@ -74,9 +74,11 @@ class DQNAgent:
         return player_x
 
     def save_data(self):
+        # get the time in the format hh:mm
+        time_str = time.strftime("%H:%M")
         df = pd.DataFrame(self.performance['score'], columns=['score'])
-        df.to_csv("performance_{}.csv".format(time.time()))
-        self.model.save("model_{}.h5".format(time.time()))
+        df.to_csv(f"performances/performance_{self.smart_reward}_{self.learning_rate}_{self.batch_size}_{self.memory_size}{time_str}.csv")
+        self.model.save(f"trained_models/model_{self.smart_reward}_{self.learning_rate}_{self.batch_size}_{self.memory_size}_{time_str}.h5")
 
     def plot_running_average(self, window_size=50):
         cumulative_sum = np.cumsum(self.performance['score'])
@@ -186,10 +188,19 @@ class DQNAgent:
                 # retrieve an action
                 action = self.get_action(state)
                 # take a step
-                next_state, reward, terminal = self.env.step(action)
+                next_state, env_reward, terminal = self.env.step(action)
                 next_state = np.reshape(next_state, [1] + list(self.state_shape))
-                # append information to the memory buffer
-                self.append_sample(state, action, reward, next_state, terminal)
+
+                if self.smart_reward:
+                    # predict the ball landing position and calculate the smart reward
+                    ball_landing = self.predict_ball_landing()
+                    player_x = self.find_player_x()
+                    distance_to_ball_landing = abs(ball_landing - player_x)
+                    # Normalize the distance to the ball landing within the desired range
+                    smart_reward = 0.2 - (distance_to_ball_landing / (self.env.size - 1)) * 0.4
+                    # append information to memory buffer
+                self.append_sample(state, action, smart_reward + env_reward if self.smart_reward else env_reward,
+                                   next_state, terminal)
                 # update the current state
                 state = next_state
         print("Finished warming up.")
@@ -211,19 +222,16 @@ class DQNAgent:
                 next_state, env_reward, terminal = self.env.step(action)
                 next_state = np.reshape(next_state, [1] + list(self.state_shape))
 
-                # predict the ball landing position and calculate the smart reward
-                ball_landing = self.predict_ball_landing()
-                player_x = self.find_player_x()
-                distance_to_ball_landing = abs(ball_landing - player_x)
-                # Normalize the distance to the ball landing within the desired range
-                smart_reward = 0.2 - (distance_to_ball_landing / (self.env.size - 1)) * 0.4
-                # print(smart_reward)
-
-                # combine the environment reward and smart reward
-                combined_reward = env_reward + smart_reward
-
+                if self.smart_reward:
+                    # predict the ball landing position and calculate the smart reward
+                    ball_landing = self.predict_ball_landing()
+                    player_x = self.find_player_x()
+                    distance_to_ball_landing = abs(ball_landing - player_x)
+                    # Normalize the distance to the ball landing within the desired range
+                    smart_reward = 0.2 - (distance_to_ball_landing / (self.env.size - 1)) * 0.4
                 # append information to memory buffer
-                self.append_sample(state, action, combined_reward, next_state, terminal)
+                self.append_sample(state, action, smart_reward + env_reward if self.smart_reward else env_reward,
+                                   next_state, terminal)
                 # decay epsilon
                 self.decay_epsilon()
                 # train the neural network
@@ -248,4 +256,4 @@ class DQNAgent:
 
 
 agent = DQNAgent(prioritized_memory=True)
-agent.run_dqn_agent(training_episodes=1500)
+agent.run_dqn_agent(training_episodes=800)
