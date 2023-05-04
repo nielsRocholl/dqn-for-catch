@@ -8,8 +8,10 @@ import matplotlib.pyplot as plt
 
 from collections import deque
 from keras.models import Sequential
-from keras.layers import Dense, Conv2D, Flatten, Input
+from keras.layers import Dense, Conv2D, Flatten, Input, Lambda, Subtract, Add
 from keras.optimizers import RMSprop, Adam
+from keras import backend as K, Model
+from keras.callbacks import LearningRateScheduler
 
 from catch_environment import CatchEnv
 from prioritized_replay_buffer import PrioritizedReplayBuffer
@@ -34,8 +36,13 @@ class DQNAgent:
         self.warm_up_episodes = self.batch_size * 2
         self.memory_size = 5000
         self.prioritized_memory = prioritized_memory
+        self.lrs = LearningRateScheduler(self.step_decay)
         self.memory = PrioritizedReplayBuffer(self.memory_size) if prioritized_memory else deque(maxlen=2000)
-        self.smart_reward = False
+        self.smart_reward = True
+        self.smart_feature = True
+        self.dueling = True
+        self.double = True
+        self.learning_rate_schedule = False
 
         # define models
         self.model = self.build_model()
@@ -77,14 +84,17 @@ class DQNAgent:
         # get the time in the format hh:mm
         time_str = time.strftime("%H:%M")
         df = pd.DataFrame(self.performance['score'], columns=['score'])
-        df.to_csv(f"performances/performance_{self.smart_reward}_{self.learning_rate}_{self.batch_size}_{self.memory_size}{time_str}.csv")
-        self.model.save(f"trained_models/model_{self.smart_reward}_{self.learning_rate}_{self.batch_size}_{self.memory_size}_{time_str}.h5")
+        df.to_csv(
+            f"performances/performance_{self.smart_reward}_{self.learning_rate}_{self.batch_size}_{self.memory_size}{time_str}.csv")
+        self.model.save(
+            f"trained_models/model_{self.smart_reward}_{self.learning_rate}_{self.batch_size}_{self.memory_size}_{time_str}.h5")
 
     def plot_running_average(self, window_size=50):
         cumulative_sum = np.cumsum(self.performance['score'])
         running_average = (cumulative_sum[window_size - 1:] - np.concatenate(
             ([0], cumulative_sum[:-window_size]))) / window_size
         sns.set(style="darkgrid")
+        plt.ylim(0, 1)
         plt.plot(running_average)
         plt.xlabel('Episode')
         plt.ylabel('Running Average (Window Size = {})'.format(window_size))
@@ -97,19 +107,37 @@ class DQNAgent:
         :return: Sequential model
         """
 
-        model = Sequential([
-            Input(shape=self.state_shape),
-            Conv2D(32, (8, 8), strides=(4, 4), activation='relu', kernel_initializer='he_uniform'),
-            Conv2D(64, (4, 4), strides=(2, 2), activation='relu', kernel_initializer='he_uniform'),
-            Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_uniform'),
-            Flatten(),
-            Dense(512, activation='relu', kernel_initializer='he_uniform'),
-            Dense(self.action_space, activation='linear', kernel_initializer='he_uniform')
-        ])
+        input_layer = Input(shape=self.state_shape)
+        conv1 = Conv2D(32, (8, 8), strides=(4, 4), activation='relu', kernel_initializer='he_uniform')(input_layer)
+        conv2 = Conv2D(64, (4, 4), strides=(2, 2), activation='relu', kernel_initializer='he_uniform')(conv1)
+        conv3 = Conv2D(64, (3, 3), activation='relu', kernel_initializer='he_uniform')(conv2)
+        flatten = Flatten()(conv3)
 
+        if self.dueling:
+            # Dueling DQN architecture
+            state_value = Dense(1, kernel_initializer='he_uniform')(
+                Dense(512, activation='relu', kernel_initializer='he_uniform')(flatten))
+            action_advantage = Dense(self.action_space, kernel_initializer='he_uniform')(
+                Dense(512, activation='relu', kernel_initializer='he_uniform')(flatten))
+            action_mean = Lambda(lambda x: K.mean(x, axis=1, keepdims=True))(action_advantage)
+            action_centered = Subtract()([action_advantage, action_mean])
+            q_values = Add()([state_value, action_centered])
+        else:
+            # Standard DQN architecture
+            q_values = Dense(self.action_space, activation='linear', kernel_initializer='he_uniform')(
+                Dense(512, activation='relu', kernel_initializer='he_uniform')(flatten))
+
+        model = Model(inputs=input_layer, outputs=q_values)
         model.compile(loss='mse', optimizer=Adam(learning_rate=self.learning_rate))
 
         return model
+
+    def step_decay(self, epoch, lr):
+        initial_lr = 0.001
+        drop = 0.5
+        epochs_drop = 50.0
+        lr = initial_lr * (drop ** np.floor((1 + epoch) / epochs_drop))
+        return lr
 
     def update_target_model(self):
         """
@@ -157,22 +185,36 @@ class DQNAgent:
             terminal.append(mini_batch[i][4])
 
         target = self.model.predict(update_input, verbose=0)
+        target_next = self.model.predict(update_target, verbose=0)
         target_val = self.target_model.predict(update_target, verbose=0)
 
         for i in range(self.batch_size):
             if terminal[i]:
                 target[i][action[i]] = reward[i]
             else:
-                target[i][action[i]] = reward[i] + self.discount_factor * (np.amax(target_val[i]))
+                if self.double:
+                    # Double DQN update rule
+                    a = np.argmax(target_next[i])
+                    target[i][action[i]] = reward[i] + self.discount_factor * target_val[i][a]
+                else:
+                    target[i][action[i]] = reward[i] + self.discount_factor * (np.amax(target_val[i]))
 
         if self.prioritized_memory:
-            history = self.model.fit(update_input, target, batch_size=self.batch_size, epochs=1, verbose=0,
-                                     sample_weight=is_weights)
+            if self.learning_rate_schedule:
+                history = self.model.fit(update_input, target, batch_size=self.batch_size, epochs=1, verbose=0,
+                                         sample_weight=is_weights, callbacks=[self.lrs])
+            else:
+                history = self.model.fit(update_input, target, batch_size=self.batch_size, epochs=1, verbose=0,
+                                         sample_weight=is_weights)
             abs_td_errors = np.abs(target - self.model.predict(update_input, verbose=0))
             abs_td_errors = abs_td_errors.mean(axis=1)
             self.memory.update_priorities(idxs, abs_td_errors)
         else:
-            self.model.fit(update_input, target, batch_size=self.batch_size, epochs=1, verbose=0)
+            if self.learning_rate_schedule:
+                self.model.fit(update_input, target, batch_size=self.batch_size, epochs=1, verbose=0,
+                               callbacks=[self.lrs])
+            else:
+                self.model.fit(update_input, target, batch_size=self.batch_size, epochs=1, verbose=0)
 
     def warm_up_memory_buffer(self):
         """

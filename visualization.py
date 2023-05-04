@@ -1,6 +1,10 @@
 import numpy as np
 import cv2
 
+import matplotlib.pyplot as plt
+import pandas as pd
+import seaborn as sns
+
 
 def visualize(state: np.ndarray, enlarging_factor=5) -> None:
     """
@@ -35,3 +39,28 @@ def destroy() -> None:
     :return: None
     """
     cv2.destroyAllWindows()
+
+
+def plot_running_average(csv_file, window_size=100):
+    # Load the CSV file
+    data = pd.read_csv(csv_file)
+
+    # Extract the "score" column
+    scores = data['score']
+
+    # Calculate the running average
+    cumulative_sum = np.cumsum(scores)
+    running_average = (cumulative_sum[window_size - 1:] - np.concatenate(
+        ([0], cumulative_sum[:-window_size]))) / window_size
+
+    # Plot the running average of the scores
+    sns.set(style="darkgrid")
+    plt.ylim(0, 1)
+    plt.plot(running_average)
+    plt.xlabel('Episode')
+    plt.ylabel('Running Average (Window Size = {})'.format(window_size))
+    plt.title('Running Average of Scores')
+    plt.show()
+
+
+# plot_running_average("performances/performance_True_0.001_128_500009:39.csv")
