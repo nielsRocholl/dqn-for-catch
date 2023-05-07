@@ -1,6 +1,8 @@
 import os
 import time
 import random
+
+import keras
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -13,6 +15,7 @@ from keras.optimizers import RMSprop, Adam
 from keras import backend as K, Model
 from keras.callbacks import LearningRateScheduler
 
+from visualization import visualize
 from catch_environment import CatchEnv
 from prioritized_replay_buffer import PrioritizedReplayBuffer
 
@@ -20,7 +23,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 
 class DQNAgent:
-    def __init__(self, prioritized_memory=True):
+    def __init__(self, prioritized_memory):
         # define environment
         self.env = CatchEnv()
 
@@ -33,16 +36,20 @@ class DQNAgent:
         self.epsilon_decay = 0.999
         self.epsilon_min = 0.01
         self.batch_size = 128
+        self.training_episodes = 1500
         self.warm_up_episodes = self.batch_size * 2
         self.memory_size = 5000
-        self.prioritized_memory = prioritized_memory
         self.lrs = LearningRateScheduler(self.step_decay)
-        self.memory = PrioritizedReplayBuffer(self.memory_size) if prioritized_memory else deque(maxlen=2000)
+        self.beta_incr = (1.0 - 0.4) / self.training_episodes
+        self.prioritized_memory = prioritized_memory
+        self.memory = PrioritizedReplayBuffer(self.memory_size) if self.prioritized_memory else deque(maxlen=2000)
+        self.beta_increment = True
         self.smart_reward = True
         self.smart_feature = True
         self.dueling = True
         self.double = True
-        self.learning_rate_schedule = False
+        self.learning_rate_schedule = True
+        self.gradient_clipping = True
 
         # define models
         self.model = self.build_model()
@@ -51,14 +58,19 @@ class DQNAgent:
         # define performance datastructure
         self.performance = {
             "score": [],
-            "loss": []
+            "loss": [],
+            "test_score": []
         }
         self.running_average = deque(maxlen=40)
 
         # warm up buffer
-        self.warm_up_memory_buffer()
+        # self.warm_up_memory_buffer()
 
-    def predict_ball_landing(self):
+    def predict_ball_landing(self) -> int:
+        """
+        Predict the x coordinate of the ball when it lands
+        :return: x coordinate of the ball when it lands
+        """
         ballx, bally = self.env.ballx, self.env.bally
         vx, vy = self.env.vx, self.env.vy
         while bally < self.env.size - 1 - 4:
@@ -73,21 +85,38 @@ class DQNAgent:
         return ballx
 
     def find_player_x(self):
+        """
+        Find the x coordinate of the player
+        :return:
+        """
         row = self.env.image[-5]
         player_positions = np.where(row == 1)
         player_start = player_positions[0][0]
         player_end = player_positions[0][-1]
         player_x = (player_start + player_end) // 2
+        print(player_x)
         return player_x
 
     def save_data(self):
         # get the time in the format hh:mm
         time_str = time.strftime("%H:%M")
-        df = pd.DataFrame(self.performance['score'], columns=['score'])
-        df.to_csv(
-            f"performances/performance_{self.smart_reward}_{self.learning_rate}_{self.batch_size}_{self.memory_size}{time_str}.csv")
-        self.model.save(
-            f"trained_models/model_{self.smart_reward}_{self.learning_rate}_{self.batch_size}_{self.memory_size}_{time_str}.h5")
+        score = pd.DataFrame(self.performance['score'], columns=['score'])
+        test_score = pd.DataFrame(self.performance['test_score'], columns=['test_score'])
+
+        file_name = f'learningRate={self.learning_rate}_' \
+                    f'batchSize={self.batch_size}_' \
+                    f'memorySize={self.memory_size}_' \
+                    f'prioritizedMemory={self.prioritized_memory}_' \
+                    f'lrs={self.learning_rate_schedule}_' \
+                    f'smartReward={self.smart_reward}_' \
+                    f'betaIncrement={self.beta_increment}' \
+                    f'dueling={self.dueling}_' \
+                    f'double={self.double}_' \
+                    f'gradientClipping={self.gradient_clipping}'
+
+        score.to_csv(f"performances/default_hyperparameter_tests/{file_name}_{time_str}.csv")
+        test_score.to_csv(f"performances/10_episode_policy_evaluations/testScore_{time_str}.csv")
+        self.model.save(f"trained_models/{file_name}_{time_str}.h5")
 
     def plot_running_average(self, window_size=50):
         cumulative_sum = np.cumsum(self.performance['score'])
@@ -103,7 +132,7 @@ class DQNAgent:
 
     def build_model(self) -> Sequential:
         """
-        Define the DQN model
+        Define the model, can be either regular or dueling
         :return: Sequential model
         """
 
@@ -128,11 +157,20 @@ class DQNAgent:
                 Dense(512, activation='relu', kernel_initializer='he_uniform')(flatten))
 
         model = Model(inputs=input_layer, outputs=q_values)
-        model.compile(loss='mse', optimizer=Adam(learning_rate=self.learning_rate))
+        if self.gradient_clipping:
+            model.compile(loss='mse', optimizer=Adam(learning_rate=self.learning_rate, clipvalue=1.0))
+        else:
+            model.compile(loss='mse', optimizer=Adam(learning_rate=self.learning_rate))
 
         return model
 
-    def step_decay(self, epoch, lr):
+    def step_decay(self, epoch, lr) -> float:
+        """
+        Learning rate decay
+        :param epoch:
+        :param lr: learning rate
+        :return: new learning rate
+        """
         initial_lr = 0.001
         drop = 0.5
         epochs_drop = 50.0
@@ -146,12 +184,16 @@ class DQNAgent:
         """
         self.target_model.set_weights(self.model.get_weights())
 
-    def get_action(self, state):
+    def get_action(self, state, greedy=False) -> [int]:
         """
         Explore or exploit
+        :param greedy: if True, the agent will always exploit
         :param state: stack of 4 states
         :return: action
         """
+        if greedy:
+            q_value = self.model.predict(state, verbose=0)
+            return np.argmax(q_value[0])
         if np.random.rand() <= self.epsilon:
             return np.random.randint(0, 3)
         else:
@@ -165,13 +207,36 @@ class DQNAgent:
         if self.epsilon > self.epsilon_min:
             self.epsilon *= self.epsilon_decay
 
-    def train_model(self):
+    def evaluate(self, episode) -> None:
+        """
+        Evaluate the performance of the agent over 10 episodes
+        :param episode: current episode
+        """
+        test_rewards = []
+        for e in range(10):
+            score = 0
+            self.env.reset()
+            state, reward, terminal = self.env.step(1)
+            state = np.reshape(state, [1] + list(self.state_shape))
+
+            while not terminal:
+                action = self.get_action(state, greedy=True)
+                state, reward, terminal = self.env.step(action)
+                state = np.reshape(state, [1] + list(self.state_shape))
+                score += reward
+            print("Test episode: {}/{}, score: {}".format(e + 1, 10, score))
+            test_rewards.append(score)
+            self.performance['score'].append(score)
+        avg_test_reward = np.mean(test_rewards)
+        print(f"Episode: {episode + 1} || Epsilon: {self.epsilon:.2f} || Score: {avg_test_reward:.2f}")
+        self.performance['test_score'].append(avg_test_reward)
+
+    def train_model(self) -> None:
         if self.prioritized_memory:
             mini_batch, idxs, is_weights = self.memory.sample(self.batch_size)
         else:
             mini_batch = random.sample(self.memory, self.batch_size)
             is_weights = np.ones(self.batch_size)
-
         update_input = np.zeros((self.batch_size, *self.state_shape))
         update_target = np.zeros((self.batch_size, *self.state_shape))
 
@@ -247,17 +312,34 @@ class DQNAgent:
                 state = next_state
         print("Finished warming up.")
 
-    def run_dqn_agent(self, training_episodes=500):
-        print(
-            f"Training DQN agent for {training_episodes} episodes. Performance will be printed after {self.running_average.maxlen} episodes.")
+    def test_trained_agent(self, file):
+        model = keras.models.load_model(file)
+        scores = []
+        for episode in range(50):
+            score = 0
+            self.env.reset()
+            state, reward, terminal = self.env.step(1)
+            while not terminal:
+                visualize(state)
+                action = model.predict(state.reshape(1, *self.state_shape))
+                state, reward, terminal = self.env.step(np.argmax(action))
+                score += reward
+            scores.append(score)
+            print(f'Episode {episode + 1} Score: {score}')
+        print(f"Average score over 20 episodes: {np.mean(scores)}")
 
-        for episode in range(training_episodes):
+    def run_dqn_agent(self):
+        print(
+            f"Training DQN agent for {self.training_episodes} episodes. Performance will be printed after {self.running_average.maxlen} episodes.")
+
+        for episode in range(self.training_episodes):
             score = 0
             self.env.reset()
             state, reward, terminal = self.env.step(1)
             state = np.reshape(state, [1] + list(self.state_shape))
 
             while not terminal:
+                visualize(state)
                 # retrieve an action
                 action = self.get_action(state)
                 # take a step
@@ -274,10 +356,11 @@ class DQNAgent:
                 # append information to memory buffer
                 self.append_sample(state, action, smart_reward + env_reward if self.smart_reward else env_reward,
                                    next_state, terminal)
-                # decay epsilon
-                self.decay_epsilon()
+
                 # train the neural network
                 self.train_model()
+                # decay epsilon
+                self.decay_epsilon()
                 # track the score
                 score += env_reward
                 # update the current state
@@ -287,15 +370,19 @@ class DQNAgent:
                     self.running_average.append(score)
                     self.update_target_model()
 
-            # track performance
-            self.performance['score'].append(score)
-            if episode > self.running_average.maxlen:
-                print(
-                    f"Episode: {episode} || Epsilon: {self.epsilon:.2f} || Score: {np.mean(self.running_average):.2f}")
+            # evaluate the agent's policy every 10 episodes
+            if (episode + 1) % 10 == 0:
+                self.evaluate(episode)
+
+            # TODO: Increment the beta parameter - check if this improves performance
+            if self.prioritized_memory and self.memory.beta < 1.0 and self.beta_increment:
+                self.memory.beta += self.beta_incr
 
         self.save_data()
         self.plot_running_average()
 
 
-agent = DQNAgent(prioritized_memory=True)
-agent.run_dqn_agent(training_episodes=800)
+agent = DQNAgent(True)
+# agent.test_trained_agent("trained_models/learningRate=0.001_batchSize=128_memorySize=5000_prioritizedMemory=True_lrs=True_smartReward=False_betaIncrement=Truedueling=True_double=True_gradientClipping=True_18:55.h5")
+agent.warm_up_memory_buffer()
+agent.run_dqn_agent()

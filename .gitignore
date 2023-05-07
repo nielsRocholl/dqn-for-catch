@@ -1,4 +1,5 @@
 trained_models/
+performances/
 .idea/
 .gitignor
 .DS_Store
