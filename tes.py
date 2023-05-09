@@ -1,27 +1,3 @@
-import os
-import time
-import random
-
-import keras
-import numpy as np
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-from collections import deque
-from keras.models import Sequential
-from keras.layers import Dense, Conv2D, Flatten, Input, Lambda, Subtract, Add
-from keras.optimizers import RMSprop, Adam
-from keras import backend as K, Model
-from keras.callbacks import LearningRateScheduler
-
-from visualization import visualize
-from catch_environment import CatchEnv
-from prioritized_replay_buffer import PrioritizedReplayBuffer
-
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
-
-
 class DQNAgent:
     def __init__(self, prioritized_memory):
         # define environment
@@ -77,67 +53,16 @@ class DQNAgent:
             return self.learning_rate
 
     def predict_ball_landing(self) -> int:
-        """
-        Predict the x coordinate of the ball when it lands
-        :return: x coordinate of the ball when it lands
-        """
-        ballx, bally = self.env.ballx, self.env.bally
-        vx, vy = self.env.vx, self.env.vy
-        while bally < self.env.size - 1 - 4:
-            ballx += vx
-            bally += vy
-            if ballx > self.env.size - 1:
-                ballx -= 2 * (ballx - (self.env.size - 1))
-                vx *= -1
-            elif ballx < 0:
-                ballx += 2 * (0 - ballx)
-                vx *= -1
-        return ballx
+        .....
 
     def find_player_x(self):
-        """
-        Find the x coordinate of the player
-        :return:
-        """
-        row = self.env.image[-5]
-        player_positions = np.where(row == 1)
-        player_start = player_positions[0][0]
-        player_end = player_positions[0][-1]
-        player_x = (player_start + player_end) // 2
-        return player_x
+        ....
 
     def save_data(self):
-        # get the time in the format hh:mm
-        time_str = time.strftime("%H:%M")
-        score = pd.DataFrame(self.performance['score'], columns=['score'])
-        test_score = pd.DataFrame(self.performance['test_score'], columns=['test_score'])
-
-        file_name = f'learningRate={self.learning_rate}_' \
-                    f'batchSize={self.batch_size}_' \
-                    f'memorySize={self.memory_size}_' \
-                    f'prioritizedMemory={self.prioritized_memory}_' \
-                    f'lrs={self.learning_rate_schedule}_' \
-                    f'smartReward={self.smart_reward}_' \
-                    f'betaIncrement={self.beta_increment}' \
-                    f'dueling={self.dueling}_' \
-                    f'double={self.double}_' \
-                    f'gradientClipping={self.gradient_clipping}'
-
-        score.to_csv(f"performances/default_hyperparameter_tests/{file_name}_{time_str}.csv")
-        test_score.to_csv(f"performances/10_episode_policy_evaluations/testScore_{time_str}.csv")
-        self.model.save(f"trained_models/{file_name}_{time_str}.h5")
+        ....
 
     def plot_running_average(self, window_size=50):
-        cumulative_sum = np.cumsum(self.performance['score'])
-        running_average = (cumulative_sum[window_size - 1:] - np.concatenate(
-            ([0], cumulative_sum[:-window_size]))) / window_size
-        sns.set(style="darkgrid")
-        plt.ylim(0, 1)
-        plt.plot(running_average)
-        plt.xlabel('Episode')
-        plt.ylabel('Running Average (Window Size = {})'.format(window_size))
-        plt.title('Running Average of Scores')
-        plt.show()
+        ....
 
     def build_model(self) -> Sequential:
         """
@@ -204,28 +129,7 @@ class DQNAgent:
             self.epsilon *= self.epsilon_decay
 
     def evaluate(self, episode) -> None:
-        """
-        Evaluate the performance of the agent over 10 episodes
-        :param episode: current episode
-        """
-        test_rewards = []
-        for e in range(10):
-            score = 0
-            self.env.reset()
-            state, reward, terminal = self.env.step(1)
-            state = np.reshape(state, [1] + list(self.state_shape))
-
-            while not terminal:
-                action = self.get_action(state, greedy=True)
-                state, reward, terminal = self.env.step(action)
-                state = np.reshape(state, [1] + list(self.state_shape))
-                score += reward
-            print("Test episode: {}/{}, score: {}".format(e + 1, 10, score))
-            test_rewards.append(score)
-            self.performance['score'].append(score)
-        avg_test_reward = np.mean(test_rewards)
-        print(f"Episode: {episode + 1} || Epsilon: {self.epsilon:.3f} || Score: {avg_test_reward:.2f} || learning_rate: {self.model.optimizer.learning_rate.numpy():.4f}")
-        self.performance['test_score'].append(avg_test_reward)
+        .......
 
     def train_model(self) -> None:
         if self.prioritized_memory:
@@ -374,8 +278,3 @@ class DQNAgent:
 
         self.save_data()
         self.plot_running_average()
-
-
-agent = DQNAgent(True)
-agent.warm_up_memory_buffer()
-agent.run_dqn_agent()
