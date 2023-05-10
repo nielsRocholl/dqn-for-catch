@@ -1,6 +1,9 @@
 trained_models/
-performances/
+performances/10_episode_policy_evaluations
+performances/boolean_hyperparameter_tests
+performances/default_hyperparameter_tests
 .idea/
 .gitignor
 .DS_Store
 __pycache__/
+Archive.zip
