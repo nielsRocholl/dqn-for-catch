@@ -41,4 +41,4 @@ In this example, an agent is created, the memory buffer is warmed up with initia
 
 ## Performance
 Agent with all improvements set to True reaches convergence after around 600 episodes. 
-![Performance](performances/performance.png)
+![Performance](performances/performance_.png)
