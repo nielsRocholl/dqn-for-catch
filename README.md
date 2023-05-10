@@ -40,5 +40,8 @@ agent.run_dqn_agent()
 In this example, an agent is created, the memory buffer is warmed up with initial experiences, and then the agent is trained.
 
 ## Performance
+
 Agent with all improvements set to True reaches convergence after around 600 episodes. 
+
+
 ![Performance](performances/performance_.png)
