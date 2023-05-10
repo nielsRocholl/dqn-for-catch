@@ -21,6 +21,14 @@ The DQN agent uses deep learning and reinforcement learning principles to learn 
 
 Each of these can be set to True or False to include them.
 
+## Requirements
+
+The required packages can be installed by running:
+
+```bash
+pip install -r requirements.txt
+```
+
 ## Code
 
 The main part of the code is the `DQNAgent` class, which defines the behavior of the agent. It includes the model definition, the training loop, and various other methods that are used in the reinforcement learning process.
