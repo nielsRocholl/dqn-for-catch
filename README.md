@@ -49,7 +49,7 @@ In this example, an agent is created, the memory buffer is warmed up with initia
 
 ## Performance
 
-Agent with all improvements set to True reaches convergence after around 600 episodes. 
+Agent with all improvements set to True reaches convergence after around 600 episodes. Results shown below are extracted by evaluation the behavior function, i.e. excluding expoloration during evaluation.
 
 
 ![Performance](performances/performance.png)
