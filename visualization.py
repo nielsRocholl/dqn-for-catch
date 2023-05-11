@@ -1,5 +1,7 @@
 import re
 import os
+import sys
+
 import numpy as np
 import cv2
 
@@ -20,13 +22,14 @@ def visualize(state: np.ndarray, enlarging_factor=5) -> None:
     size = 84 * enlarging_factor
     # get the most recent frame
     state = state[..., -1]
+
     resized_frame = cv2.resize(state, (size, size))
     color_frame = np.zeros((size, size, 3), dtype=np.uint8)
 
-    # Set purple color for the ball and paddle
-    color_frame[resized_frame == 1] = [255, 230, 0]
+    # Set yellow color for the ball and paddle
+    color_frame[resized_frame > 0] = [28, 184, 255]
 
-    # Set orange color for the background
+    # Set purple color for the background
     color_frame[resized_frame == 0] = [75, 0, 88]
 
     cv2.imshow('Catch Game', color_frame)
@@ -45,16 +48,16 @@ def plot_running_average_all_files():
     directory = 'performances/default_hyperparameter_tests/'
     window_size = 100
     all_scores = []
-    plt.figure(figsize=(7, 5))
+    plt.figure(figsize=(7, 5), dpi=800)
 
     for filename in os.listdir(directory):
         file_path = os.path.join(directory, filename)
         data = pd.read_csv(file_path)
         scores = data['score']
-        if len(scores) == 1500:
-        # if filename == 'learningRate=0.001_batchSize=128_memorySize=5000_prioritizedMemory=True_lrs=True_smartReward=True_betaIncrement=Truedueling=True_double=True_gradientClipping=True_09:28.csv':
+        if len(scores) == 1000:
+            # if filename == 'learningRate=0.001_batchSize=128_memorySize=5000_prioritizedMemory=True_lrs=True_smartReward=True_betaIncrement=Truedueling=True_double=True_gradientClipping=True_09:28.csv':
             running_avg = scores.rolling(window=window_size, min_periods=1).mean()
-            if running_avg[100] > 0.53:
+            if running_avg[100] > 0.40:
                 all_scores.append(scores)
                 plt.plot(running_avg, linewidth=0.8)
 
@@ -65,7 +68,7 @@ def plot_running_average_all_files():
     mean_rolling_mean = pd.Series(mean_scores).rolling(window=100, min_periods=1).mean()
 
     # Plot the mean line
-    plt.plot(mean_rolling_mean, linewidth=1, color='black', label='Mean')
+    plt.plot(mean_rolling_mean, linewidth=1.2, color='black', label='Mean')
 
     # dense grid
     plt.grid(True)
@@ -75,7 +78,10 @@ def plot_running_average_all_files():
     plt.legend()
 
     plt.ylim(0, 1)
-    plt.xlim(0, 1500)
+    plt.xlim(0, 1000)
+    plt.ylabel("Avg Reward")
+    plt.title("Rolling mean of 100 episodes")
+    plt.xlabel("Episode")
     plt.show()
 
 
@@ -90,7 +96,6 @@ def plot_10_episode_policy_evaluation_all_files():
 
     for filename in os.listdir(directory):
         if filename == "testScore_11:32.csv":
-
             file_path = os.path.join(directory, filename)
             data = pd.read_csv(file_path)
             scores = data['test_score']
@@ -119,4 +124,3 @@ def plot_10_episode_policy_evaluation_all_files():
 
 plot_running_average_all_files()
 # plot_10_episode_policy_evaluation_all_files()
-

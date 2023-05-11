@@ -11,9 +11,8 @@ import matplotlib.pyplot as plt
 from collections import deque
 from keras.models import Sequential
 from keras.layers import Dense, Conv2D, Flatten, Input, Lambda, Subtract, Add
-from keras.optimizers import RMSprop, Adam
+from keras.optimizers import Adam
 from keras import backend as K, Model
-from keras.callbacks import LearningRateScheduler
 
 from visualization import visualize
 from catch_environment import CatchEnv
@@ -37,15 +36,14 @@ class DQNAgent:
         self.epsilon_min = 0.01
         self.batch_size = 128
         self.current_epoch = 0
-        self.training_episodes = 1500
+        self.training_episodes = 1000
         self.warm_up_episodes = self.batch_size * 2
-        self.memory_size = 5000
+        self.memory_size = 100000
         self.beta_incr = (1.0 - 0.4) / self.training_episodes
         self.prioritized_memory = prioritized_memory
         self.memory = PrioritizedReplayBuffer(self.memory_size) if self.prioritized_memory else deque(maxlen=2000)
         self.beta_increment = True
         self.smart_reward = True
-        self.smart_feature = True
         self.dueling = True
         self.double = True
         self.learning_rate_schedule = True
@@ -224,7 +222,8 @@ class DQNAgent:
             test_rewards.append(score)
             self.performance['score'].append(score)
         avg_test_reward = np.mean(test_rewards)
-        print(f"Episode: {episode + 1} || Epsilon: {self.epsilon:.3f} || Score: {avg_test_reward:.2f} || learning_rate: {self.model.optimizer.learning_rate.numpy():.4f}")
+        print(
+            f"Episode: {episode + 1} || Epsilon: {self.epsilon:.3f} || Score: {avg_test_reward:.2f} || learning_rate: {self.model.optimizer.learning_rate.numpy():.4f}")
         self.performance['test_score'].append(avg_test_reward)
 
     def train_model(self) -> None:
