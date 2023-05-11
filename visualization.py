@@ -48,13 +48,13 @@ def plot_running_average_all_files():
     directory = 'performances/default_hyperparameter_tests/'
     window_size = 100
     all_scores = []
-    plt.figure(figsize=(7, 5), dpi=800)
+    plt.figure(figsize=(7, 5), dpi=200)
 
     for filename in os.listdir(directory):
         file_path = os.path.join(directory, filename)
         data = pd.read_csv(file_path)
         scores = data['score']
-        if len(scores) == 1000:
+        if len(scores) >= 1500:
             # if filename == 'learningRate=0.001_batchSize=128_memorySize=5000_prioritizedMemory=True_lrs=True_smartReward=True_betaIncrement=Truedueling=True_double=True_gradientClipping=True_09:28.csv':
             running_avg = scores.rolling(window=window_size, min_periods=1).mean()
             if running_avg[100] > 0.40:
@@ -78,7 +78,7 @@ def plot_running_average_all_files():
     plt.legend()
 
     plt.ylim(0, 1)
-    plt.xlim(0, 1000)
+    plt.xlim(0, 2500)
     plt.ylabel("Avg Reward")
     plt.title("Rolling mean of 100 episodes")
     plt.xlabel("Episode")
@@ -95,10 +95,11 @@ def plot_10_episode_policy_evaluation_all_files():
     all_scores = []
 
     for filename in os.listdir(directory):
-        if filename == "testScore_11:32.csv":
+        if filename == "testScore_23:00.csv" or filename == "testScore_14:27.csv":
             file_path = os.path.join(directory, filename)
             data = pd.read_csv(file_path)
             scores = data['test_score']
+            print(np.mean(scores), filename)
             all_scores.append(scores)
             plt.plot(scores, linewidth=0.5)
 
@@ -114,7 +115,9 @@ def plot_10_episode_policy_evaluation_all_files():
     # dense grid
     plt.grid(True)
     plt.yticks(np.arange(0, 1.1, 0.1))
-
+    plt.ylabel("Reward")
+    plt.xlabel("Epoch (10 episodes)")
+    plt.title("Performance policy during training")
     # Adjust the legend with a smaller font size and position outside the plot
     plt.legend()
 

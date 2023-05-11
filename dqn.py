@@ -36,7 +36,7 @@ class DQNAgent:
         self.epsilon_min = 0.01
         self.batch_size = 128
         self.current_epoch = 0
-        self.training_episodes = 1000
+        self.training_episodes = 2000
         self.warm_up_episodes = self.batch_size * 2
         self.memory_size = 100000
         self.beta_incr = (1.0 - 0.4) / self.training_episodes
